@@ -141,3 +141,13 @@ powershell -ExecutionPolicy Bypass -File "<...>\tray\install-autostart.ps1" -Sta
   （トレイがこれを見て自分も畳む仕組み）
 - **初回起動で警告が出る** … 署名していないため、Windows が確認を求めることがあります。
   内容はすべてテキストで読める形（.js / .ps1 / .vbs）で入っています。
+
+---
+
+## 同じ作者のもの
+
+- **[Claude セッション盤面](https://github.com/suto648/claude-session-board)**（無料）
+  — Claude Code の会話を一覧で見て、続きから開き直す盤面。
+  **CbC への繋ぎ方の実装例**としても使えます（`cbc-registry-entry.json` 同梱）。
+- **[やるべきこと-editor](https://suto648.github.io/)**（有料・Windows）
+  — 今日やったことが勝手にまとまる作業メモ。使い方は買う前に全文読めます。
