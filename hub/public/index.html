@@ -1,0 +1,1189 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CbC Tools</title>
+<style>
+/* =========================================================
+   CbC Tools — 制御盤
+   発想の出どころ: アナンシエータ盤（警報表示盤）。
+   暗い窓に刻まれた銘板が、条件が立つと点灯する。消えていても
+   文字は読める＝「何があるか」は常に見え、「今どうか」は光で分かる。
+   このツール群が生まれた発端が「壊れているのに成功と report する
+   タスク」だったので、盤面は "黙って正常に見える" ことができない。
+   ========================================================= */
+:root{
+  --panel:#C6C9BC;        /* 塗装された盤面 */
+  --panel-hi:#D6D9CC;     /* 面の起き上がり */
+  --panel-lo:#9AA093;     /* 影・ベゼル */
+  --recess:#21241E;       /* 窓のくぼみ */
+  --plate:#EFEDE2;        /* 銘板の象牙色（点灯時の文字） */
+  --dim:#767E70;          /* 消灯時の文字 */
+  --ink:#23261F;          /* 盤面上の文字 */
+  --ink-soft:#5B6257;
+  --run:#63D68E;
+  --warn:#FFB02E;
+  --alarm:#FF5140;
+  --idle:#8A9384;
+
+  --sans:'Bahnschrift','BIZ UDPGothic','Yu Gothic UI',sans-serif;
+  --mono:'Consolas','Cascadia Mono','BIZ UDGothic',monospace;
+
+  --unit:8px;
+  --radius:3px;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  min-height:100vh;
+  background:
+    linear-gradient(180deg, var(--panel-hi) 0%, var(--panel) 22%, var(--panel) 100%),
+    var(--panel);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:15px;
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+/* 盤面の刷毛目。ごく薄く、模様として気づかれない程度に */
+body::before{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:repeating-linear-gradient(90deg,rgba(0,0,0,.014) 0 1px,transparent 1px 3px);
+}
+.rack{position:relative;z-index:1;max-width:1000px;margin:0 auto;padding:calc(var(--unit)*3) calc(var(--unit)*3) calc(var(--unit)*6)}
+
+/* ---------- 見出し（盤の銘板） ---------- */
+.masthead{
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:center;
+  gap:calc(var(--unit)*2);
+  padding:calc(var(--unit)*2) calc(var(--unit)*2.5);
+  border-radius:var(--radius);
+  background:linear-gradient(180deg,var(--panel-hi),var(--panel));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55), inset 0 -1px 0 var(--panel-lo), 0 1px 2px rgba(0,0,0,.14);
+}
+.masthead__mark{
+  font-size:22px;font-weight:700;letter-spacing:.14em;
+  font-variation-settings:'wght' 700,'wdth' 87;
+  margin:0;white-space:nowrap;
+}
+.masthead__mark span{font-weight:400;font-variation-settings:'wght' 400,'wdth' 87;color:var(--ink-soft)}
+.masthead__state{margin:0;font-size:14px;color:var(--ink-soft)}
+.masthead__clock{margin:0;font-family:var(--mono);font-size:12px;color:var(--ink-soft);white-space:nowrap}
+
+/* ---------- 総合ランプ ---------- */
+.beacon{
+  width:18px;height:18px;border-radius:50%;
+  background:var(--idle);
+  box-shadow:inset 0 0 0 2px rgba(0,0,0,.28), 0 0 0 3px var(--panel-lo);
+  transition:background .18s ease, box-shadow .18s ease;
+}
+.beacon[data-level="ok"]{background:var(--run);box-shadow:inset 0 0 0 2px rgba(0,0,0,.25),0 0 0 3px var(--panel-lo),0 0 12px rgba(99,214,142,.75)}
+.beacon[data-level="partial"]{background:var(--idle);box-shadow:inset 0 0 0 2px rgba(0,0,0,.25),0 0 0 3px var(--panel-lo)}
+.beacon[data-level="warn"]{background:var(--warn);box-shadow:inset 0 0 0 2px rgba(0,0,0,.25),0 0 0 3px var(--panel-lo),0 0 12px rgba(255,176,46,.8)}
+.beacon[data-level="alarm"]{background:var(--alarm);box-shadow:inset 0 0 0 2px rgba(0,0,0,.25),0 0 0 3px var(--panel-lo),0 0 14px rgba(255,81,64,.85)}
+
+/* ---------- アカウント盤（計器つきの銘板） ----------
+   ここだけ「稼働/停止」ではなく「あとどれだけ残っているか」を見る。
+   だから灯りではなく計器で表す。空いている方には印を付けるが、
+   もう片方を減光はしない——並べて比べるためのものなので、
+   暗くすると比較そのものが壊れる。 */
+.acct{
+  margin-top:calc(var(--unit)*2.5);
+  padding:calc(var(--unit)*1.5);
+  border-radius:var(--radius);
+  background:linear-gradient(180deg,var(--panel-hi),var(--panel));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 0 -1px 0 var(--panel-lo),0 1px 2px rgba(0,0,0,.12);
+}
+.acct[hidden]{display:none}
+.acct__win{
+  padding:calc(var(--unit)*1.5) calc(var(--unit)*2);
+  border-radius:2px;
+  background:var(--recess);
+  box-shadow:inset 0 2px 5px rgba(0,0,0,.55),0 1px 0 rgba(255,255,255,.4);
+}
+.acct__head{display:flex;align-items:baseline;gap:calc(var(--unit)*1.5);flex-wrap:wrap}
+.acct__title{
+  margin:0;font-size:12px;letter-spacing:.18em;color:var(--dim);
+  font-variation-settings:'wght' 600,'wdth' 87;white-space:nowrap;
+}
+.acct__note{margin:0;font-size:12.5px;color:#9AA394}
+
+.acct__rows{margin-top:calc(var(--unit)*1.25);display:grid;gap:10px}
+.acct__row{
+  display:grid;
+  grid-template-columns:11px minmax(150px,1fr) minmax(120px,1.4fr) 104px 92px auto;
+  align-items:center;
+  column-gap:calc(var(--unit)*1.5);
+}
+.acct__mark{
+  width:0;height:0;justify-self:center;
+  border-left:7px solid transparent;border-top:5px solid transparent;border-bottom:5px solid transparent;
+}
+.acct__row[data-pick="1"] .acct__mark{border-left-color:var(--run);filter:drop-shadow(0 0 5px rgba(99,214,142,.8))}
+.acct__who{display:flex;flex-direction:column;min-width:0}
+.acct__who b{
+  font-size:14.5px;font-weight:600;color:var(--plate);
+  font-variation-settings:'wght' 600,'wdth' 87;letter-spacing:.02em;
+}
+.acct__who em{
+  font-style:normal;font-family:var(--mono);font-size:11px;color:#78806F;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+/* 計器。目盛は 25% ごと */
+.acct__gauge{
+  position:relative;height:9px;border-radius:1px;
+  background:#171A14;box-shadow:inset 0 1px 2px rgba(0,0,0,.7);
+  overflow:hidden;
+}
+.acct__gauge::after{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(90deg,transparent 0 calc(25% - 1px),rgba(198,201,188,.28) calc(25% - 1px) 25%);
+}
+.acct__gauge i{display:block;height:100%;background:var(--run);transition:width .3s ease}
+.acct__gauge i[data-lv="warn"]{background:var(--warn)}
+.acct__gauge i[data-lv="full"]{background:var(--alarm)}
+.acct__read{display:flex;flex-direction:column;font-family:var(--mono);line-height:1.35}
+.acct__read b{font-size:13.5px;font-weight:400;color:var(--plate)}
+.acct__read em{font-style:normal;font-size:10.5px;color:#78806F;white-space:nowrap}
+.acct__row[data-state="bad"] .acct__read b{color:#F0B5AC}
+/* ▶ が何の印なのかを、印のすぐ下に置く。凡例は離すと読まれない */
+.acct__legend{margin:calc(var(--unit)*1.25) 0 0;font-size:12px;color:#8B937F;line-height:1.5}
+.acct__legend b{color:var(--run);font-weight:400}
+
+@media (max-width:760px){
+  .acct__row{grid-template-columns:11px 1fr auto;grid-template-areas:'mark who btn' '. gauge gauge' '. read read'}
+  .acct__mark{grid-area:mark}.acct__who{grid-area:who}
+  .acct__gauge{grid-area:gauge;margin-top:6px}
+  .acct__read{grid-area:read}
+  .acct__read--week{display:none}
+  .acct__row button{grid-area:btn}
+}
+
+/* ---------- ユニット（窓＋その下のスイッチ） ---------- */
+.units{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(430px,1fr));
+  gap:calc(var(--unit)*2.5);
+  margin-top:calc(var(--unit)*3);
+}
+.unit{
+  padding:calc(var(--unit)*1.5);
+  border-radius:var(--radius);
+  background:linear-gradient(180deg,var(--panel-hi),var(--panel));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.5), inset 0 -1px 0 var(--panel-lo), 0 1px 2px rgba(0,0,0,.12);
+}
+
+/* 窓：消えていても銘板は読める */
+.tile{
+  position:relative;
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  grid-template-areas:'lamp name mode' 'lamp detail detail';
+  column-gap:calc(var(--unit)*1.5);
+  row-gap:4px;
+  padding:calc(var(--unit)*1.75) calc(var(--unit)*2);
+  border-radius:2px;
+  background:var(--recess);
+  box-shadow:inset 0 2px 5px rgba(0,0,0,.55), 0 1px 0 rgba(255,255,255,.4);
+  border-left:3px solid var(--idle);
+  transition:border-color .18s ease, background .18s ease;
+}
+.tile__lamp{
+  grid-area:lamp;align-self:start;margin-top:5px;
+  width:10px;height:10px;border-radius:50%;
+  background:#3A403A;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.6);
+  transition:background .18s ease, box-shadow .18s ease;
+}
+.tile__name{
+  grid-area:name;margin:0;
+  font-size:17px;font-weight:600;letter-spacing:.03em;
+  font-variation-settings:'wght' 600,'wdth' 87;
+  color:var(--dim);
+  transition:color .18s ease;
+}
+.tile__mode{
+  grid-area:mode;align-self:center;
+  font-size:11px;letter-spacing:.16em;
+  color:#565E52;
+  padding:2px 7px;border-radius:2px;
+  border:1px solid #3A403A;
+  white-space:nowrap;
+}
+.tile__detail{
+  grid-area:detail;margin:0;
+  font-family:var(--mono);font-size:12.5px;line-height:1.45;
+  color:#7C857A;
+  word-break:break-word;
+  transition:color .18s ease;
+}
+
+/* 点灯 */
+.unit[data-state="running"] .tile{border-left-color:var(--run);background:radial-gradient(130% 180% at 0% 0%,rgba(99,214,142,.13),transparent 62%),var(--recess)}
+.unit[data-state="running"] .tile__lamp{background:var(--run);box-shadow:0 0 8px rgba(99,214,142,.9),inset 0 0 0 1px rgba(0,0,0,.3)}
+.unit[data-state="running"] .tile__name{color:var(--plate)}
+.unit[data-state="running"] .tile__detail{color:#A9B2A5}
+
+.unit[data-state="warn"] .tile{border-left-color:var(--warn);background:radial-gradient(130% 180% at 0% 0%,rgba(255,176,46,.16),transparent 62%),var(--recess)}
+.unit[data-state="warn"] .tile__lamp{background:var(--warn);box-shadow:0 0 8px rgba(255,176,46,.9),inset 0 0 0 1px rgba(0,0,0,.3)}
+.unit[data-state="warn"] .tile__name{color:var(--plate)}
+.unit[data-state="warn"] .tile__detail{color:#D8C79F}
+
+.unit[data-state="alert"] .tile{border-left-color:var(--alarm);background:radial-gradient(130% 180% at 0% 0%,rgba(255,81,64,.18),transparent 62%),var(--recess)}
+.unit[data-state="alert"] .tile__lamp{background:var(--alarm);box-shadow:0 0 10px rgba(255,81,64,.95),inset 0 0 0 1px rgba(0,0,0,.3)}
+.unit[data-state="alert"] .tile__name{color:var(--plate)}
+.unit[data-state="alert"] .tile__detail{color:#F0B5AC}
+
+.unit[data-state="planned"] .tile{opacity:.72;border-left-style:dashed}
+
+/* 遷移中：押した直後、実態が確認できるまで。灯りが定まらないことで表す */
+.unit[data-pending] .tile__lamp{animation:settling 1s ease-in-out infinite}
+.unit[data-pending] .tile__detail{color:#9AA394}
+@keyframes settling{0%,100%{opacity:1}50%{opacity:.25}}
+
+/* 未確認の警報は明滅し続ける。確認するまで静かにならない＝この盤の要点 */
+.unit[data-latched="1"] .tile{animation:latch 1.9s ease-in-out infinite}
+@keyframes latch{
+  0%,100%{box-shadow:inset 0 2px 5px rgba(0,0,0,.55),0 1px 0 rgba(255,255,255,.4),0 0 0 0 rgba(255,81,64,0)}
+  50%    {box-shadow:inset 0 2px 5px rgba(0,0,0,.55),0 1px 0 rgba(255,255,255,.4),0 0 0 4px rgba(255,81,64,.32)}
+}
+
+/* ---------- スイッチ列 ---------- */
+.switches{
+  display:flex;flex-wrap:wrap;align-items:center;gap:var(--unit);
+  margin-top:calc(var(--unit)*1.5);
+}
+.sw{
+  font-family:var(--sans);font-size:13px;letter-spacing:.04em;
+  color:var(--ink);
+  padding:6px 14px;
+  border:1px solid var(--panel-lo);
+  border-radius:2px;
+  background:linear-gradient(180deg,#E2E4D9,#C9CCC0);
+  box-shadow:0 1px 0 rgba(255,255,255,.6) inset,0 1px 1px rgba(0,0,0,.12);
+  cursor:pointer;
+}
+.sw:hover:not(:disabled){background:linear-gradient(180deg,#EAECE2,#D2D5C9)}
+.sw:active:not(:disabled){background:linear-gradient(180deg,#BFC3B6,#CFD2C6);box-shadow:inset 0 1px 2px rgba(0,0,0,.25)}
+.sw:disabled{opacity:.42;cursor:not-allowed}
+.sw--ghost{background:transparent;box-shadow:none;color:var(--ink-soft)}
+.sw--ghost:hover:not(:disabled){background:rgba(255,255,255,.42)}
+.sw--ack{border-color:#B4574C;color:#7A2E25}
+/* 直し方は「押せば直る」ものなので、確認より前に、面から起こして置く */
+.sw--fix{
+  border-color:#3E6B4A;color:#F0F3EA;
+  background:linear-gradient(180deg,#4E8F63,#3E7351);
+  box-shadow:0 1px 0 rgba(255,255,255,.25) inset,0 1px 2px rgba(0,0,0,.22);
+}
+.sw--fix:hover:not(:disabled){background:linear-gradient(180deg,#589B6E,#46805B)}
+.sw--fix:active:not(:disabled){background:linear-gradient(180deg,#3E7351,#4E8F63);box-shadow:inset 0 1px 3px rgba(0,0,0,.3)}
+/* キー待ち。押されるまで待っていることを、点滅でなく静かな枠で示す */
+.sw--capturing{border-color:#2E5F8F;color:#1E4A73;background:rgba(46,95,143,.12)}
+.sw:focus-visible,.toggle:focus-within{outline:2px solid #2E5F8F;outline-offset:2px}
+
+.toggle{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--ink);cursor:pointer;user-select:none;margin-left:auto}
+.toggle input{position:absolute;opacity:0;width:0;height:0}
+.toggle__track{
+  width:34px;height:18px;border-radius:9px;flex:none;
+  background:var(--panel-lo);
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.35);
+  position:relative;transition:background .16s ease;
+}
+.toggle__track::after{
+  content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+  background:#F2F3EC;box-shadow:0 1px 2px rgba(0,0,0,.35);
+  transition:transform .16s ease;
+}
+.toggle input:checked + .toggle__track{background:#4E8F63}
+.toggle input:checked + .toggle__track::after{transform:translateX(16px)}
+.toggle input:disabled + .toggle__track{opacity:.4}
+.toggle--off{color:var(--ink-soft)}
+
+.unit__caption{
+  margin:calc(var(--unit)*1.25) 0 0;
+  font-size:12.5px;line-height:1.55;color:var(--ink-soft);
+}
+.unit__caption b{font-weight:600;color:var(--ink)}
+
+/* ---------- 下部レール ---------- */
+.rail{
+  display:flex;flex-wrap:wrap;align-items:center;gap:calc(var(--unit)*1.5);
+  margin-top:calc(var(--unit)*3);
+  padding:calc(var(--unit)*1.5) calc(var(--unit)*2);
+  border-radius:var(--radius);
+  background:linear-gradient(180deg,var(--panel-hi),var(--panel));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 0 -1px 0 var(--panel-lo),0 1px 2px rgba(0,0,0,.12);
+}
+.rail__note{font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
+
+/* ---------- ログ窓 ---------- */
+.sheet{border:0;padding:0;background:transparent;max-width:min(900px,92vw);width:100%}
+.sheet::backdrop{background:rgba(20,23,18,.55)}
+.sheet__body{
+  background:var(--recess);color:#B7BFB2;
+  border-radius:var(--radius);
+  padding:calc(var(--unit)*2);
+  box-shadow:0 12px 40px rgba(0,0,0,.45);
+}
+.sheet__head{display:flex;align-items:baseline;gap:var(--unit);margin-bottom:var(--unit)}
+.sheet__title{margin:0;font-size:16px;color:var(--plate);font-variation-settings:'wght' 600,'wdth' 87}
+.sheet__path{font-family:var(--mono);font-size:11.5px;color:#6E776B;word-break:break-all}
+.sheet__log{
+  margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.55;
+  white-space:pre-wrap;word-break:break-word;
+  max-height:56vh;overflow:auto;
+}
+.sheet__close{margin-top:var(--unit)}
+
+/* ---------- 会話を選ぶシート ----------
+   ログ窓(.sheet)と同じくぼみの中に置く。ここは「選ぶ」ためだけの面なので、
+   盤面のような指標は持ち込まない（時刻・題・場所・誰で開いたか、だけ） */
+.sheet--wide{max-width:min(860px,94vw)}
+.pick__acct{
+  display:flex;flex-wrap:wrap;align-items:center;gap:var(--unit) calc(var(--unit)*2);
+  padding-bottom:calc(var(--unit)*1.25);
+  border-bottom:1px solid rgba(198,201,188,.16);
+}
+.pick__label{font-size:12px;letter-spacing:.14em;color:var(--dim)}
+.pick__radios{display:flex;gap:calc(var(--unit)*1.5);flex-wrap:wrap}
+.pick__opt{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:13.5px;color:#B7BFB2}
+.pick__opt input{position:absolute;opacity:0;width:0;height:0}
+.pick__dot{
+  width:12px;height:12px;border-radius:50%;flex:none;
+  background:#171A14;box-shadow:inset 0 0 0 1px rgba(198,201,188,.45);
+}
+.pick__opt input:checked ~ .pick__dot{background:var(--run);box-shadow:inset 0 0 0 1px rgba(0,0,0,.4),0 0 7px rgba(99,214,142,.7)}
+.pick__opt input:checked ~ .pick__name{color:var(--plate)}
+.pick__opt input:disabled ~ .pick__name{color:#5F675C}
+.pick__opt input:focus-visible ~ .pick__dot{outline:2px solid #7FB4E8;outline-offset:2px}
+.pick__why{margin:0;flex:1 1 100%;font-size:12px;color:#8B937F}
+
+.pick__bar{display:flex;flex-wrap:wrap;gap:var(--unit);align-items:center;margin:calc(var(--unit)*1.5) 0 var(--unit)}
+.pick__q{
+  flex:1 1 240px;min-width:0;
+  font-family:var(--sans);font-size:13px;color:var(--plate);
+  background:#171A14;border:1px solid rgba(198,201,188,.2);border-radius:2px;
+  padding:7px 10px;
+}
+.pick__q::placeholder{color:#69715F}
+.pick__q:focus{outline:2px solid #7FB4E8;outline-offset:1px}
+.pick__seg{display:flex;gap:4px}
+.pick__seg .sw{color:#9AA394;border-color:rgba(198,201,188,.22)}
+.pick__seg .sw[aria-pressed="true"]{
+  background:linear-gradient(180deg,#E2E4D9,#C9CCC0);color:var(--ink);
+  border-color:var(--panel-lo);box-shadow:0 1px 0 rgba(255,255,255,.6) inset;
+}
+
+.pick__list{max-height:52vh;overflow:auto;margin:0 -4px;padding:0 4px}
+.pick__head{
+  position:sticky;top:0;z-index:1;
+  margin:calc(var(--unit)*1.5) 0 6px;padding:4px 0;
+  background:var(--recess);
+  font-size:11.5px;letter-spacing:.12em;color:var(--dim);
+}
+.pick__head:first-child{margin-top:0}
+/* 「もう片方で進んでいる会話」は別枠。記録があるときだけ出る */
+.pick__head--other{color:#E8C978}
+.pick__row{
+  display:grid;grid-template-columns:58px 1fr auto auto;
+  align-items:center;gap:var(--unit);
+  padding:7px 8px;border-radius:2px;
+  border-left:2px solid transparent;
+}
+.pick__row + .pick__row{border-top:1px solid rgba(198,201,188,.08)}
+.pick__row:hover{background:rgba(198,201,188,.06)}
+.pick__row[data-other="1"]{border-left-color:#E8C978}
+.pick__row[data-openable="0"]{opacity:.45}
+.pick__t{font-family:var(--mono);font-size:11.5px;color:#78806F;white-space:nowrap}
+.pick__title{
+  min-width:0;font-size:13.5px;color:var(--plate);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.pick__title span{display:block;font-size:11px;color:#78806F;overflow:hidden;text-overflow:ellipsis}
+.pick__who{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;
+  padding:2px 7px;border-radius:2px;white-space:nowrap;
+  color:#9AA394;box-shadow:inset 0 0 0 1px rgba(198,201,188,.22);
+}
+.pick__who[data-other="1"]{color:#E8C978;box-shadow:inset 0 0 0 1px rgba(232,201,120,.45)}
+.pick__none{padding:calc(var(--unit)*3) 0;text-align:center;color:#8B937F;font-size:13px;line-height:1.7}
+.pick__note{margin:calc(var(--unit)*1.5) 0 0;font-size:11.5px;color:#78806F;line-height:1.6}
+
+@media (max-width:620px){
+  .pick__row{grid-template-columns:1fr auto;grid-template-areas:'title btn' 'meta btn'}
+  .pick__title{grid-area:title}.pick__t{grid-area:meta}
+  .pick__who{display:none}
+}
+
+.toast{
+  position:fixed;left:50%;bottom:22px;transform:translateX(-50%);
+  background:var(--recess);color:var(--plate);
+  font-size:13px;padding:9px 16px;border-radius:2px;
+  box-shadow:0 6px 22px rgba(0,0,0,.4);
+  opacity:0;pointer-events:none;transition:opacity .2s ease;z-index:50;
+}
+.toast[data-show="1"]{opacity:1}
+
+@media (max-width:560px){
+  .units{grid-template-columns:1fr}
+  .masthead{grid-template-columns:auto 1fr;row-gap:4px}
+  .masthead__clock{grid-column:2}
+}
+
+/* 起動時のランプテスト。実物の警報盤が電源投入で全灯するのと同じ */
+@media (prefers-reduced-motion:no-preference){
+  .lamptest .tile__lamp{animation:lt .62s ease-out both}
+  .lamptest .tile{animation:none}
+  @keyframes lt{
+    0%{background:var(--plate);box-shadow:0 0 10px rgba(239,237,226,.85)}
+    100%{}
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  .unit[data-latched="1"] .tile{animation:none;outline:2px solid var(--alarm);outline-offset:-2px}
+  *{transition-duration:.01ms !important}
+}
+
+/* 登録が0件のときの案内。買った直後に最初に見る画面になる。 */
+.empty{padding:26px 24px 28px;border:1px dashed var(--line,#b9bdb2);border-radius:12px;
+       background:rgba(255,255,255,.35)}
+.empty__h{margin:0 0 8px;font-size:16px;font-weight:600}
+.empty__p{margin:0 0 16px;font-size:13px;line-height:1.9;opacity:.85}
+.empty__steps{margin:0 0 14px;padding-left:22px;font-size:13px;line-height:1.9}
+.empty__steps li{margin-bottom:8px}
+.empty__steps b{display:block;font-weight:600}
+.empty__steps span{opacity:.8}
+.empty__hint{margin:0;font-size:12.5px;opacity:.7;line-height:1.8}
+.empty code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;
+            background:rgba(0,0,0,.06);border-radius:4px;padding:1px 5px}
+</style>
+</head>
+<body>
+<div class="rack">
+  <header class="masthead">
+    <span class="beacon" id="beacon" data-level="partial" aria-hidden="true"></span>
+    <div>
+      <h1 class="masthead__mark">CbC <span>TOOLS</span></h1>
+      <p class="masthead__state" id="overall">状態を読み込んでいます</p>
+    </div>
+    <p class="masthead__clock" id="clock">—</p>
+  </header>
+
+  <section class="acct" id="acct" hidden>
+    <div class="acct__win">
+      <div class="acct__head">
+        <h2 class="acct__title">CLAUDE ACCOUNT</h2>
+        <p class="acct__note" id="acctNote">読み込んでいます</p>
+      </div>
+      <div class="acct__rows" id="acctRows"></div>
+      <p class="acct__legend" id="acctLegend"></p>
+    </div>
+    <div class="switches">
+      <button class="sw" id="acctPickBoard">ボードから選んで開く</button>
+      <button class="sw sw--ghost" id="acctRefresh">読み直す</button>
+      <span class="rail__note" id="acctAge"></span>
+    </div>
+    <p class="unit__caption" id="acctCaption"></p>
+  </section>
+
+  <main class="units" id="units" aria-live="polite"></main>
+
+  <footer class="rail">
+    <button class="sw" id="stopAll">全部止める</button>
+    <button class="sw sw--ghost" id="openLogs">CbC のログ</button>
+    <span class="rail__note" id="railNote">—</span>
+    <label class="toggle" id="selfToggle" title="CbC 本体を PC 起動時に立ち上げます">
+      <input type="checkbox" id="selfCb"><span class="toggle__track"></span><span>CbC 自身も PC起動時</span>
+    </label>
+  </footer>
+</div>
+
+<dialog class="sheet" id="sheet">
+  <div class="sheet__body">
+    <div class="sheet__head">
+      <h2 class="sheet__title" id="sheetTitle">ログ</h2>
+      <span class="sheet__path" id="sheetPath"></span>
+    </div>
+    <pre class="sheet__log" id="sheetLog"></pre>
+    <button class="sw sheet__close" id="sheetClose">閉じる</button>
+  </div>
+</dialog>
+
+<dialog class="sheet sheet--wide" id="pick">
+  <div class="sheet__body">
+    <div class="sheet__head">
+      <h2 class="sheet__title">どの会話を続ける？</h2>
+      <span class="sheet__path" id="pickCount"></span>
+    </div>
+
+    <div class="pick__acct">
+      <span class="pick__label">開くアカウント</span>
+      <div class="pick__radios" id="pickAcct"></div>
+      <p class="pick__why" id="pickWhy"></p>
+    </div>
+
+    <div class="pick__bar">
+      <input class="pick__q" id="pickQ" type="search" placeholder="タイトル・プロジェクト・ファイルで絞る" autocomplete="off">
+      <div class="pick__seg" id="pickView">
+        <button class="sw sw--ghost" data-view="recent">新しい順</button>
+        <button class="sw sw--ghost" data-view="project">プロジェクトごと</button>
+      </div>
+    </div>
+
+    <div class="pick__list" id="pickList"></div>
+    <p class="pick__note" id="pickNote"></p>
+    <button class="sw sheet__close" id="pickClose">閉じる</button>
+  </div>
+</dialog>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const MODE_LABEL = { daemon:'常駐', scheduled:'スケジュール', external:'外部', ondemand:'都度' };
+const MODE_WHY = {
+  daemon:'CbC が起動と停止を持つ',
+  scheduled:'Windows のタスクが持つ。止めるのではなく自動起動を切る',
+  external:'外から起動されたものは CbC からは止めない',
+  ondemand:'必要な時だけ回す',
+};
+
+let latest = null;
+let toastTimer = null;
+
+function toast(msg){
+  const el = $('toast');
+  el.textContent = msg;
+  el.dataset.show = '1';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.dataset.show = '0'; }, 3200);
+}
+
+async function post(path, body){
+  const r = await fetch(path, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body || {}),
+  });
+  return r.json();
+}
+
+/* 警報の「確認」は、その警報の中身ごとに覚える。
+   同じツールでも別の異常なら、もう一度明滅させる。
+   鍵は alertKey（異常の種類）。detail をそのまま使うと、
+   こちらが文言を直しただけで鳴り直してしまう。 */
+const ackKey = (t) => `cbc.ack:${t.id}:${t.alertKey || t.detail}`;
+const isAcked = (t) => localStorage.getItem(ackKey(t)) === '1';
+const ack = (t) => localStorage.setItem(ackKey(t), '1');
+
+function render(payload){
+  latest = payload;
+  const tools = payload.tools || [];
+
+  // ランプ。登録が0件なら緑にしない。
+  // 何も見ていないのに「全部正常」に見えるのは、この道具がいちばん避けたい状態
+  //（壊れているのに成功と報告するタスクに気づけなかったのが、そもそもの発端）。
+  const lampLevel = (payload.tools || []).filter(t => t.implemented).length === 0
+    ? 'partial'
+    : (payload.overall === 'alert' ? 'alarm' : payload.overall);
+  $('beacon').dataset.level = lampLevel;
+  const counts = tools.filter(t => t.implemented);
+  const running = counts.filter(t => t.state === 'running').length;
+  const bad = counts.filter(t => t.state === 'alert' || t.state === 'warn').length;
+  $('overall').textContent =
+    // ★登録が0件のときに「すべて想定どおり」と言わない。
+    //   何も見ていないのに、見た上で問題なしと言っているように読める。
+    counts.length === 0 ? 'まだ何も登録されていません'
+    : payload.overall === 'alert' ? `${bad} 件、放っておけない状態です`
+    : payload.overall === 'warn' ? `${bad} 件、見ておいた方がよさそうです`
+    : payload.overall === 'ok' ? 'すべて想定どおり'
+    : `${running} / ${counts.length} 稼働中`;
+
+  $('clock').textContent = new Date(payload.ts).toLocaleTimeString('ja-JP') + ' 更新';
+  $('railNote').textContent = payload.probeAlive ? '状態は2秒ごとに読み直しています' : 'プローブが落ちています。再起動を待っています';
+
+  const self = payload.self || {};
+  const cb = $('selfCb');
+  if (document.activeElement !== cb) cb.checked = !!self.on;
+  cb.disabled = !self.registered;
+  $('selfToggle').classList.toggle('toggle--off', !self.on);
+  if (!self.registered) $('selfToggle').title = 'CbC-Hub タスクが未登録です（tray\\install-autostart.ps1 を実行してください）';
+
+  renderAccounts(payload.accounts);
+
+  const host = $('units');
+  host.innerHTML = '';
+  if (!tools.length) {
+    // 登録が0件のとき。買って入れた直後がこの状態になる。
+    // 何も出さないと「すべて想定どおり」だけが残り、何をすればいいか分からない。
+    host.appendChild(emptyStateEl());
+  } else {
+    for (const t of tools) host.appendChild(unitEl(t));
+  }
+}
+
+function emptyStateEl(){
+  const el = document.createElement('div');
+  el.className = 'empty';
+  el.innerHTML = `
+    <h2 class="empty__h">まだ何も登録されていません</h2>
+    <p class="empty__p">
+      CbC は、あなたが作った常駐ツールを1か所にまとめて、
+      いま動いているかどうかを見えるようにするための窓です。
+      ツールそのものは作りません。登録簿と起動係です。
+    </p>
+    <ol class="empty__steps">
+      <li><b>つなぎ方を読む</b><span>フォルダ直下の <code>CONNECT.md</code>。Claude にそのまま渡せます。</span></li>
+      <li><b>登録簿に1件足す</b><span><code>hub&#92;registry.json</code> の <code>tools</code> に追記します。</span></li>
+      <li><b>2秒ごとに知らせる</b><span>ツール側から <code>POST /api/state/&lt;id&gt;</code>。見本は <code>tools&#92;sample-daemon&#92;main.js</code>。</span></li>
+    </ol>
+    <p class="empty__hint">
+      まず動かしてみるなら、見本を登録簿に戻してください
+      （<code>hub&#92;registry.sample.json</code> に入っています）。
+    </p>`;
+  return el;
+}
+
+/* ---------- アカウント盤 ----------
+   ★出来ないことを出来るように見せない。押しても今の会話は動かない。
+     新しいタブが開くだけで、会話ごと移すのはタブの中の Claude の仕事。 */
+const ACCT_STATE_TEXT = {
+  none:      'ログインしていません',
+  expired:   '資格情報が切れています',
+  mismatch:  'アカウントを取り違えています',
+  missing:   'プロファイルがありません',
+  'api-error': '使用量を読めませんでした',
+};
+let acctSig = '';
+
+function hhmm(ms){
+  return ms ? new Date(ms).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}) : '—';
+}
+function mdhm(ms){
+  return ms ? new Date(ms).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+}
+
+function renderAccounts(a){
+  const host = $('acct');
+  if (!a) { host.hidden = true; return; }
+  host.hidden = false;
+
+  // 数字が古くなっても灰色で殺さない。何時時点のものかを文章で言う
+  $('acctAge').textContent = a.busy ? '読み直しています…'
+    : !a.dataAt ? '—'
+    : `${hhmm(a.dataAt)} 時点` + (a.ageSec > 300 ? '・以降は読めていません' : '');
+
+  const sig = JSON.stringify({ ok:a.ok, error:a.error, pick:a.pick, reason:a.reason, at:a.dataAt, list:a.list });
+  if (sig === acctSig) return;
+  acctSig = sig;
+
+  // まだ取りに行っていないだけの状態を、失敗と書かない
+  $('acctNote').textContent = a.ok ? (a.reason || '')
+    : !a.tried ? '使用量を読んでいます…'
+    : (a.error || '使用量を読み取れませんでした');
+
+  // ▶ が何の印なのかを、印のすぐ下に書く。凡例は離して置くと読まれない
+  $('acctLegend').textContent = '';
+  if (a.ok && a.pick) {
+    const b = document.createElement('b'); b.textContent = '▶';
+    $('acctLegend').append(b, ` = いま5時間枠が空いている方。${a.reason || ''}`);
+  } else if (a.ok) {
+    $('acctLegend').textContent = '両方とも5時間枠が埋まっているので、▶ は出ていません。';
+  }
+  $('acctPickBoard').disabled = !a.ok;
+
+  // 「読めていない」と「読めた上で両方いっぱい」は別のこと。混ぜると
+  // 状態を知らないまま知っているふりをすることになる
+  $('acctCaption').textContent =
+    (!a.ok && !a.tried) ? ''
+  : !a.ok  ? '使用量を読めていないので、どちらを使うべきか分かりません。「読み直す」で取り直せます。'
+  : !a.pick ? '両方とも上限に達しています。押せるようになるのは、どちらかの枠が戻ってからです。'
+  : '押すと新しいタブが開きます。今動いている会話はそのまま残ります（会話ごと移したいときは、そのタブの中の Claude に頼みます）。';
+
+  const rows = $('acctRows');
+  rows.innerHTML = '';
+  for (const x of (a.list || [])) {
+    const el = document.createElement('div');
+    el.className = 'acct__row';
+    if (x.key === a.pick) el.dataset.pick = '1';
+    if (x.state !== 'ok') el.dataset.state = 'bad';
+
+    const lv = x.fiveHour == null ? 'ok' : (x.fiveHour >= 92 ? 'full' : x.fiveHour >= 75 ? 'warn' : 'ok');
+    el.innerHTML = `
+      <span class="acct__mark"></span>
+      <span class="acct__who"><b></b><em></em></span>
+      <span class="acct__gauge"><i></i></span>
+      <span class="acct__read"><b></b><em></em></span>
+      <span class="acct__read acct__read--week"><b></b><em></em></span>`;
+    el.querySelector('.acct__who b').textContent = x.key;
+    el.querySelector('.acct__who em').textContent = x.mail || '';
+
+    const bar = el.querySelector('.acct__gauge i');
+    bar.dataset.lv = lv;
+    bar.style.width = (x.fiveHour == null ? 0 : Math.max(0, Math.min(100, x.fiveHour))) + '%';
+
+    const five = el.querySelectorAll('.acct__read')[0];
+    const week = el.querySelectorAll('.acct__read')[1];
+    if (x.state === 'ok') {
+      five.querySelector('b').textContent = `5時間 ${x.fiveHour}%`;
+      five.querySelector('em').textContent = `${hhmm(x.fiveReset)} に戻る`;
+      week.querySelector('b').textContent = `週 ${x.weekly}%`;
+      week.querySelector('em').textContent = `${mdhm(x.weekReset)}`;
+    } else {
+      five.querySelector('b').textContent = ACCT_STATE_TEXT[x.state] || x.state;
+      five.querySelector('em').textContent = x.note || '';
+      el.querySelector('.acct__gauge').style.visibility = 'hidden';
+    }
+
+    const b = document.createElement('button');
+    b.className = 'sw' + (x.key === a.pick ? '' : ' sw--ghost');
+    b.textContent = '開く';
+    b.disabled = x.state !== 'ok';
+    b.title = x.state === 'ok' ? `${x.mail} で新しいタブを開きます` : '使えない状態です';
+    b.onclick = () => openAccount(x.key);
+    el.appendChild(b);
+
+    rows.appendChild(el);
+  }
+}
+
+async function openAccount(key){
+  const r = await post('/api/accounts/open', { key });
+  toast(r.ok ? `${key} のタブを開きました` : (r.error || '開けませんでした'));
+}
+
+/* ---------- 会話を選ぶシート ----------
+   ★アカウントは上で1回だけ選ぶ。行ごとに選ばせない——
+     「どのアカウントで開こうとしているか」が常に見えている方が間違えない。
+   ★一覧は session-board から借りている（作り直していない）。
+     盤面が止まっていたら、ここから起こせるようにする。 */
+let pickData = null;        // { ok, list[], boardDown, error }
+let pickAccount = null;     // いま選んでいるアカウント
+let pickView = 'recent';    // 'recent' | 'project'
+
+function fmtWhen(ts){
+  if (!ts) return '';
+  const d = new Date(ts), now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  return sameDay ? d.toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})
+                 : d.toLocaleDateString('ja-JP',{month:'numeric',day:'numeric'});
+}
+function dayKey(ts){
+  const d = new Date(ts), now = new Date();
+  const s = d.toLocaleDateString('ja-JP',{month:'numeric',day:'numeric',weekday:'short'});
+  return d.toDateString() === now.toDateString() ? s + '（今日）' : s;
+}
+
+async function openPickSheet(){
+  const a = (latest && latest.accounts) || null;
+  pickAccount = (a && a.pick) || (a && a.list && a.list.length ? a.list[0].key : null);
+  $('pick').showModal();
+  $('pickList').innerHTML = '<p class="pick__none">セッション盤面から一覧を読んでいます…</p>';
+  $('pickCount').textContent = '';
+  $('pickNote').textContent = '';
+  renderPickAcct();
+  await loadPickList();
+}
+
+function renderPickAcct(){
+  const a = (latest && latest.accounts) || { list: [] };
+  const host = $('pickAcct');
+  host.innerHTML = '';
+  for (const x of (a.list || [])) {
+    const lab = document.createElement('label');
+    lab.className = 'pick__opt';
+    lab.innerHTML = `<input type="radio" name="pickacct"><span class="pick__dot"></span><span class="pick__name"></span>`;
+    const r = lab.querySelector('input');
+    r.checked = x.key === pickAccount;
+    r.disabled = x.state !== 'ok';
+    lab.querySelector('.pick__name').textContent =
+      x.state === 'ok' ? `${x.key}（5時間 ${x.fiveHour}%）` : `${x.key}（使えません）`;
+    r.onchange = () => { pickAccount = x.key; renderPickAcct(); renderPickList(); };
+    host.appendChild(lab);
+  }
+  const other = (a.list || []).find(x => x.key !== pickAccount);
+  $('pickWhy').textContent = !a.pick ? '両方とも5時間枠が埋まっています。'
+    : pickAccount === a.pick ? `▶ ${a.reason || ''}`
+    : `※ 空いているのは ${a.pick} の方です${other ? '' : ''}。それでも ${pickAccount} で開きます。`;
+}
+
+async function loadPickList(){
+  try {
+    const r = await fetch('/api/sessions');
+    pickData = await r.json();
+  } catch (_) {
+    pickData = { ok:false, error:'一覧を取れませんでした' };
+  }
+  renderPickList();
+}
+
+function renderPickList(){
+  const host = $('pickList');
+  host.innerHTML = '';
+  $('pickNote').textContent = '';
+
+  if (!pickData || !pickData.ok) {
+    const p = document.createElement('p');
+    p.className = 'pick__none';
+    if (pickData && pickData.boardDown) {
+      p.textContent = 'セッション盤面が動いていないので一覧を出せません。';
+      const b = document.createElement('button');
+      b.className = 'sw'; b.textContent = 'セッション盤面を起動する';
+      b.style.marginTop = '12px';
+      b.onclick = async () => {
+        b.disabled = true; b.textContent = '起動しています…';
+        const s = await post('/api/tool/start', { id: (pickData.boardToolId || 'session-board') });
+        if (!s.ok) { b.disabled = false; b.textContent = 'セッション盤面を起動する'; return toast(s.error || '起動できませんでした'); }
+        // 盤面の初回スキャンは大きい JSONL を全文読むので数秒かかる
+        host.innerHTML = '<p class="pick__none">盤面を起こしました。最初の読み取りに少し時間がかかります…</p>';
+        setTimeout(loadPickList, 6000);
+      };
+      p.appendChild(document.createElement('br'));
+      p.appendChild(b);
+    } else {
+      p.textContent = (pickData && pickData.error) || '一覧を取れませんでした';
+    }
+    host.appendChild(p);
+    return;
+  }
+
+  const q = $('pickQ').value.trim().toLowerCase();
+  const all = (pickData.list || []).filter(s => {
+    if (!q) return true;
+    return [s.title, s.project, s.snippet, (s.files || []).join(' ')].join(' ').toLowerCase().includes(q);
+  });
+
+  $('pickCount').textContent = `${all.length} 件`;
+
+  if (!all.length) { host.innerHTML = '<p class="pick__none">見つかりませんでした</p>'; return; }
+
+  // ★「もう片方で進んでいる会話」は別枠で先頭に。記録があるものだけ。
+  //   1件も無いときは枠ごと出さない（「無い」と「分からない」を空欄で混ぜない）
+  const others = all.filter(s => s.account && s.account !== pickAccount).slice(0, 5);
+  if (others.length) {
+    addHead(host, `もう片方（${others[0].account}）で進んでいる会話`, true);
+    for (const s of others) host.appendChild(pickRow(s, true));
+  }
+
+  if (pickView === 'project') {
+    const byProj = new Map();
+    for (const s of all) {
+      const k = s.project || '(場所不明)';
+      if (!byProj.has(k)) byProj.set(k, []);
+      byProj.get(k).push(s);
+    }
+    // グループの並びは「そのグループで最も新しいもの」順
+    const groups = [...byProj.entries()].sort((x, y) =>
+      new Date(y[1][0].lastTs || 0) - new Date(x[1][0].lastTs || 0));
+    for (const [name, rows] of groups) {
+      addHead(host, `${name}　${rows.length} 件`);
+      for (const s of rows) host.appendChild(pickRow(s, false));
+    }
+  } else {
+    let day = null;
+    for (const s of all) {
+      const k = s.lastTs ? dayKey(s.lastTs) : '日付なし';
+      if (k !== day) { day = k; addHead(host, k); }
+      host.appendChild(pickRow(s, false));
+    }
+  }
+
+  // 記録が始まる前の会話には印が付かない。空欄の意味を書いておく
+  if (!pickData.hasAccountRecords) {
+    $('pickNote').textContent =
+      '※ どのアカウントで開いたかの記録は今日から始まりました。それ以前の会話に印は付きません（会話ログ自体にアカウントは残らないため）。';
+  }
+}
+
+function addHead(host, text, other){
+  const h = document.createElement('div');
+  h.className = 'pick__head' + (other ? ' pick__head--other' : '');
+  h.textContent = text;
+  host.appendChild(h);
+}
+
+function pickRow(s, isOther){
+  const el = document.createElement('div');
+  el.className = 'pick__row';
+  el.dataset.openable = s.openable ? '1' : '0';
+  if (isOther) el.dataset.other = '1';
+  el.innerHTML = `
+    <span class="pick__t"></span>
+    <span class="pick__title"><span></span></span>
+    <span class="pick__who"></span>`;
+  el.querySelector('.pick__t').textContent = fmtWhen(s.lastTs);
+  const t = el.querySelector('.pick__title');
+  t.insertBefore(document.createTextNode(s.title), t.firstChild);
+  t.querySelector('span').textContent = s.project || s.cwd || '';
+
+  const who = el.querySelector('.pick__who');
+  if (s.account) {
+    who.textContent = s.account;
+    if (s.account !== pickAccount) who.dataset.other = '1';
+    who.title = '最後にこのアカウントで開きました';
+  } else {
+    who.textContent = '—';
+    who.title = 'どのアカウントで開いたかの記録がありません';
+  }
+
+  const b = document.createElement('button');
+  b.className = 'sw';
+  b.textContent = '開く';
+  b.disabled = !s.openable || !pickAccount;
+  b.title = s.openable ? `${pickAccount} で続きを開きます` : '作業フォルダが見つからないので開けません';
+  b.onclick = async () => {
+    b.disabled = true;
+    const r = await post('/api/accounts/open', { key: pickAccount, resume: s.sessionId });
+    b.disabled = false;
+    if (r.ok) { $('pick').close(); toast(`${pickAccount} で「${s.title}」を開きました`); }
+    else toast(r.error || '開けませんでした');
+  };
+  el.appendChild(b);
+  return el;
+}
+
+$('acctPickBoard').onclick = openPickSheet;
+$('pickClose').onclick = () => $('pick').close();
+$('pickQ').oninput = () => renderPickList();
+$('pickView').onclick = (e) => {
+  const b = e.target.closest('button[data-view]');
+  if (!b) return;
+  pickView = b.dataset.view;
+  for (const x of $('pickView').querySelectorAll('button')) x.setAttribute('aria-pressed', String(x === b));
+  renderPickList();
+};
+for (const x of $('pickView').querySelectorAll('button')) {
+  x.setAttribute('aria-pressed', String(x.dataset.view === pickView));
+}
+$('acctRefresh').onclick = async () => {
+  $('acctRefresh').disabled = true;
+  const r = await post('/api/accounts/refresh', {});
+  $('acctRefresh').disabled = false;
+  if (!r.ok) toast(r.error || '読み直せませんでした');
+};
+
+$('selfCb').onchange = async () => {
+  const cb = $('selfCb');
+  const r = await post('/api/self/autostart', { on: cb.checked });
+  if (!r.ok) { cb.checked = !cb.checked; toast(r.error || '切り替えられませんでした'); }
+  else toast(cb.checked ? 'PC 起動時に CbC を立ち上げます' : 'PC 起動時には CbC を立ち上げません');
+};
+
+function unitEl(t){
+  const unit = document.createElement('section');
+  unit.className = 'unit';
+  unit.dataset.state = t.state;
+  if (t.pending) unit.dataset.pending = t.pending;
+  if (t.state === 'alert' && !isAcked(t)) unit.dataset.latched = '1';
+
+  const tile = document.createElement('div');
+  tile.className = 'tile';
+  tile.innerHTML = `
+    <span class="tile__lamp"></span>
+    <h2 class="tile__name"></h2>
+    <span class="tile__mode" title="${MODE_WHY[t.mode] || ''}"></span>
+    <p class="tile__detail"></p>`;
+  tile.querySelector('.tile__name').textContent = t.name;
+  tile.querySelector('.tile__mode').textContent = MODE_LABEL[t.mode] || t.mode;
+  tile.querySelector('.tile__detail').textContent = t.detail || '';
+  unit.appendChild(tile);
+
+  const sw = document.createElement('div');
+  sw.className = 'switches';
+
+  if (t.implemented) {
+    const runBtn = document.createElement('button');
+    runBtn.className = 'sw';
+    const stopping = t.state === 'running' || t.state === 'alert' || t.state === 'warn';
+    if (t.mode === 'scheduled') {
+      runBtn.textContent = '今すぐ発火';
+      runBtn.disabled = !t.canStart;
+    } else if (stopping && t.canStop) {
+      runBtn.textContent = '停止';
+      runBtn.onclick = () => act('/api/tool/stop', t, '停止しました');
+    } else if (stopping && !t.canStop) {
+      runBtn.textContent = '停止';
+      runBtn.disabled = true;
+      runBtn.title = t.mode === 'external' ? MODE_WHY.external : '停止できません';
+    } else {
+      runBtn.textContent = '起動';
+      runBtn.disabled = !t.canStart;
+      runBtn.onclick = () => act('/api/tool/start', t, '起動しました');
+    }
+    if (t.mode === 'scheduled' && t.canStart) runBtn.onclick = () => act('/api/tool/start', t, '発火させました');
+    sw.appendChild(runBtn);
+
+    if (t.open) {
+      const b = document.createElement('button');
+      b.className = 'sw sw--ghost';
+      b.textContent = '開く';
+      b.onclick = () => act('/api/tool/open', t, '窓を開きました');
+      sw.appendChild(b);
+    }
+    if (t.hasLog) {
+      const b = document.createElement('button');
+      b.className = 'sw sw--ghost';
+      b.textContent = 'ログ';
+      b.onclick = () => showLog(t);
+      sw.appendChild(b);
+    }
+    const fb = document.createElement('button');
+    fb.className = 'sw sw--ghost';
+    fb.textContent = 'フォルダ';
+    fb.onclick = () => act('/api/tool/folder', t, 'フォルダを開きました');
+    sw.appendChild(fb);
+
+    // 割当キーの変更。押した次のキーをそのまま採る
+    if (t.configurable && 'hotkey' in t.configurable) {
+      const b = document.createElement('button');
+      b.className = 'sw sw--ghost';
+      b.textContent = 'キー: ' + String(t.configurable.hotkey || '').toUpperCase();
+      b.title = '押すと、次に叩いたキーを割り当てます';
+      b.onclick = () => captureKey(t, b);
+      sw.appendChild(b);
+    }
+
+    // 押せば直るものを先頭に。困っている対象の分だけ出る。
+    for (const f of (t.fixes || []).slice().reverse()) {
+      const b = document.createElement('button');
+      b.className = 'sw sw--fix';
+      b.textContent = f.label;
+      b.title = '黒い画面が開きます';
+      b.onclick = async () => {
+        const r = await post('/api/tool/fix', { id: t.id, key: f.key });
+        toast(r.ok ? '開きました' : (r.error || '開けませんでした'));
+      };
+      sw.insertBefore(b, sw.firstChild);
+    }
+
+    // 警報中は必ず出す。押した後も「確認済み」として残す——
+    // ボタンごと消えると、確認したのか元から無いのかが分からなくなる。
+    if (t.state === 'alert') {
+      const acked = isAcked(t);
+      const b = document.createElement('button');
+      b.className = 'sw sw--ack';
+      if (acked) {
+        b.textContent = '確認済み';
+        b.disabled = true;
+        b.title = '確認済みです。直るとランプが消えます';
+      } else {
+        b.textContent = '確認';
+        b.title = '明滅は止まりますが、直るまでランプは赤のままです';
+        b.onclick = () => { ack(t); render(latest); };
+      }
+      sw.appendChild(b);
+    }
+
+    const lab = document.createElement('label');
+    lab.className = 'toggle' + (t.autostart.on ? '' : ' toggle--off');
+    lab.innerHTML = `<input type="checkbox"><span class="toggle__track"></span><span></span>`;
+    const cb = lab.querySelector('input');
+    cb.checked = !!t.autostart.on;
+    cb.disabled = !t.autostart.supported;
+    lab.querySelector('span:last-child').textContent = 'PC起動時';
+    lab.title = t.autostart.supported
+      ? (t.autostart.source === 'task' ? `Windows タスク「${t.autostart.task}」の有効/無効を切り替えます` : 'CbC が起動したときに一緒に上げます')
+      : 'このツールは自動起動しません';
+    cb.onchange = async () => {
+      const r = await post('/api/tool/autostart', { id:t.id, on:cb.checked });
+      if (!r.ok) { cb.checked = !cb.checked; toast(r.error || '切り替えられませんでした'); }
+      else toast(cb.checked ? 'PC起動時に上げます' : 'PC起動時には上げません');
+    };
+    sw.appendChild(lab);
+  }
+  if (sw.childElementCount > 0) unit.appendChild(sw);
+
+  const cap = document.createElement('p');
+  cap.className = 'unit__caption';
+  cap.textContent = t.desc || '';
+  if (t.protected) {
+    const b = document.createElement('b');
+    b.textContent = ' — ' + t.protected;
+    cap.appendChild(b);
+  }
+  unit.appendChild(cap);
+
+  return unit;
+}
+
+/* ブラウザの e.code を keyboard ライブラリの呼び方に直す。
+   F13〜F24 は物理キーが無いぶんチャットやゲームと衝突しないので歓迎する。 */
+function keyNameFrom(e){
+  const c = e.code || '';
+  let m;
+  if ((m = /^Key([A-Z])$/.exec(c))) return m[1].toLowerCase();
+  if ((m = /^Digit(\d)$/.exec(c))) return m[1];
+  if ((m = /^F(\d{1,2})$/.exec(c))) return 'f' + m[1];
+  if (c === 'Space') return 'space';
+  return null;
+}
+
+let capturing = null;
+function captureKey(t, btn){
+  if (capturing) return;
+  const prev = btn.textContent;
+  btn.textContent = 'キーを押して…';
+  btn.classList.add('sw--capturing');
+
+  const finish = () => {
+    window.removeEventListener('keydown', onKey, true);
+    btn.classList.remove('sw--capturing');
+    capturing = null;
+  };
+  const onKey = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { btn.textContent = prev; finish(); return; }
+    const name = keyNameFrom(e);
+    if (!name) { toast('そのキーは割り当てられません（英字・数字・F1〜F24・Space）'); return; }
+    finish();
+    const r = await post('/api/tool/config', { id: t.id, patch: { hotkey: name } });
+    if (r.ok) toast(name.toUpperCase() + ' に変えました');
+    else { btn.textContent = prev; toast(r.error || '変えられませんでした'); }
+  };
+  capturing = t.id;
+  window.addEventListener('keydown', onKey, true);
+}
+
+async function act(path, t, okMsg){
+  const r = await post(path, { id:t.id });
+  toast(r.ok ? okMsg : (r.error || 'できませんでした'));
+}
+
+async function showLog(t){
+  const r = await fetch(`/api/log?tool=${encodeURIComponent(t.id)}&n=200`).then(x => x.json());
+  $('sheetTitle').textContent = t.name + ' のログ';
+  $('sheetPath').textContent = r.file || '';
+  $('sheetLog').textContent = (r.lines || []).join('\n') || '（まだ何も記録されていません）';
+  $('sheet').showModal();
+  $('sheetLog').scrollTop = $('sheetLog').scrollHeight;
+}
+$('sheetClose').onclick = () => $('sheet').close();
+
+$('stopAll').onclick = async () => {
+  $('stopAll').disabled = true;
+  const r = await post('/api/shutdown', {});
+  toast('止めました。CbC も終了します');
+  setTimeout(() => { document.body.innerHTML = '<div class="rack"><p style="margin:40px 0;color:#5B6257">CbC を終了しました。この窓は閉じて構いません。</p></div>'; }, 900);
+};
+$('openLogs').onclick = async () => {
+  const r = await post('/api/folder', {});
+  toast(r.ok ? 'ログフォルダを開きました' : (r.error || '開けませんでした'));
+};
+
+/* 電源投入時のランプテスト（動きを控える設定なら出ない） */
+document.documentElement.classList.add('lamptest');
+setTimeout(() => document.documentElement.classList.remove('lamptest'), 700);
+
+const es = new EventSource('/api/events');
+es.onmessage = (ev) => { try { render(JSON.parse(ev.data)); } catch (_) {} };
+es.onerror = () => { $('railNote').textContent = 'ハブとの接続が切れています'; };
+fetch('/api/tools').then(r => r.json()).then(render).catch(() => {});
+</script>
+</body>
+</html>

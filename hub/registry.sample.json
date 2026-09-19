@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "note": "ツールの登録簿の見本。初回起動のときに、これが registry.json としてコピーされる。以後は registry.json のほうを編集する（この見本は上書きされない）。パスは目印で書く: {CBC}=CbC を置いた場所 / {TOOLS}={CBC}\\tools / {LOGS}={CBC}\\logs / {HOME}=あなたのユーザーフォルダ / %VAR%=環境変数。目印を使えば、別のPCへフォルダごと移してもそのまま動く。",
+
+  "tools": [
+    {
+      "id": "sample-daemon",
+      "name": "見本（常駐）",
+      "desc": "つなぎ方の見本。2秒ごとに生きていることを知らせる常駐ツール",
+      "mode": "daemon",
+      "implemented": true,
+      "readOnly": false,
+      "dir": "{TOOLS}\\sample-daemon",
+      "launch": {
+        "exe": "node",
+        "args": ["{TOOLS}\\sample-daemon\\main.js"]
+      },
+      "probe": {
+        "type": "heartbeat",
+        "maxAgeSec": 8
+      },
+      "autostart": {
+        "type": "hub",
+        "enabled": false
+      },
+      "log": "{LOGS}\\sample-daemon.log",
+      "stopOrder": 50
+    }
+  ],
+
+  "_つなぎ方": {
+    "1_どれかを選ぶ": {
+      "daemon": "CbC が起動と停止を持つ常駐ツール。いちばん普通。",
+      "scheduled": "Windows のタスクが持っていて、CbC は有効/無効を切り替えるだけ。",
+      "ondemand": "押したときだけ動いて終わるもの。",
+      "external": "自分で起動するもの。CbC は見ているだけで、止めない。"
+    },
+    "2_生きていることの知らせ方": {
+      "heartbeat": "ツール側から 2 秒ごとに POST する。いちばん正確。下の書き方を参照。",
+      "process": "実行ファイル名で探す。ツールを書き換えられないときに。",
+      "task": "Windows タスクの状態を見る。",
+      "http": "決まった URL が応答するかを見る。"
+    },
+    "3_heartbeat の送り方": {
+      "宛先": "POST http://127.0.0.1:47821/api/state/<あなたのツールのid>",
+      "中身": { "level": "ok / warn / error のどれか", "detail": "人が読む一言", "pid": 1234 },
+      "間隔": "2 秒ごと。8 秒届かないと『停止中』として扱われる",
+      "補足": "Python なら tools\\_shared\\cbc.py が、この送信をまとめてある"
+    },
+    "4_止めたときに元へ戻すこと": "restore に一言書き、stopOrder を小さくすると先に止まる（例: ミュートを解除してから終わる）",
+    "5_直し方のボタン": "fix に { exe, args } を書くと、困っているときに窓へ緑のボタンが出る。対話が要るなら launchVisible: true"
+  }
+}

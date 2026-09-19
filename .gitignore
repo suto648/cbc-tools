@@ -1,0 +1,25 @@
+# ---- 実行時に生成される状態（利用者ごとの値）----
+hub/state.json
+logs/
+*.log
+
+# ---- Python のキャッシュ ----
+__pycache__/
+*.pyc
+
+# ---- 手運用のバックアップ（git 化により不要）----
+*.bak
+*.bak-*
+*.orig
+
+# ---- OS ----
+Thumbs.db
+desktop.ini
+
+# ---- 利用者ごとの設定（配布物には入れない・上書きしない）----
+# registry.json は「その人がどのツールを登録したか」。
+# 配布するのは見本（registry.sample.json）だけで、初回起動時にコピーされる。
+hub/registry.json
+
+# ---- 配布物（ビルドの出力。同梱 node.exe が 81MB あるので git に入れない）----
+dist/
