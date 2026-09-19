@@ -24,7 +24,16 @@ if (-not $created) {
     # 既に常駐している。ここで黙って終わると、ランチャーを押した人には
     # 「何も起きなかった」ようにしか見えない。動いている方に窓を開かせる。
     if (-not $Silent) {
-        try { Invoke-RestMethod -Uri 'http://127.0.0.1:47821/api/window' -Method POST -TimeoutSec 4 | Out-Null } catch {}
+        # ポートはハブが書いた logs\port.txt を見る（退避していることがある）。
+        # ここは関数定義より前なので、その場で読む。
+        $pf = Join-Path (Split-Path -Parent $PSScriptRoot) 'logs\port.txt'
+        $pt = 47821
+        if (Test-Path $pf) {
+            $v = 0
+            $raw = (Get-Content $pf -Raw -ErrorAction SilentlyContinue)
+            if ($raw -and [int]::TryParse($raw.Trim(), [ref]$v) -and $v -gt 0) { $pt = $v }
+        }
+        try { Invoke-RestMethod -Uri ("http://127.0.0.1:$pt/api/window") -Method POST -TimeoutSec 4 | Out-Null } catch {}
     }
     exit 0
 }
@@ -36,7 +45,29 @@ $Root     = Split-Path -Parent $PSScriptRoot
 $HubJs    = Join-Path $Root 'hub\hub.js'
 $LogDir   = Join-Path $Root 'logs'
 $StopFlag = Join-Path $LogDir 'shutdown.flag'
-$BaseUrl  = 'http://127.0.0.1:47821'
+$PortFile = Join-Path $LogDir 'port.txt'
+
+# ★同梱の node.exe を使う。
+#   受け取った人のPCに Node.js が入っている保証は無い。
+#   ここで 'node' と決め打ちしていたため、Node 未導入のPCでは
+#   「ハブを起動できませんでした。node が見つかりません。」で終わっていた
+#   （node.exe を同梱しているのに使っていなかった。別PC検証で発覚）。
+$NodeExe = Join-Path $Root 'node\node.exe'
+if (-not (Test-Path $NodeExe)) { $NodeExe = 'node' }   # 開発中のリポジトリ直実行
+
+# ハブが実際に待っているポート。
+# 既定は 47821 だが、そこが他のアプリに埋まっていたらハブは隣の番号へ移る。
+# 移った先はハブが logs\port.txt に書くので、それを読む。
+# ★決め打ちにすると、移った瞬間にトレイがハブを見失う。
+function Get-HubPort {
+    if (Test-Path $PortFile) {
+        $v = 0
+        $raw = (Get-Content $PortFile -Raw -ErrorAction SilentlyContinue)
+        if ($raw -and [int]::TryParse($raw.Trim(), [ref]$v) -and $v -gt 0) { return $v }
+    }
+    return 47821
+}
+function Get-BaseUrl { return ('http://127.0.0.1:' + (Get-HubPort)) }
 
 # --- ランプアイコン（色ごとに1回だけ作って使い回す） ----------------
 function New-LampIcon([System.Drawing.Color]$fill) {
@@ -66,7 +97,7 @@ $Icons = @{
 function Test-Hub {
     try {
         $c = New-Object System.Net.Sockets.TcpClient
-        $r = $c.BeginConnect('127.0.0.1', 47821, $null, $null)
+        $r = $c.BeginConnect('127.0.0.1', (Get-HubPort), $null, $null)
         $ok = $r.AsyncWaitHandle.WaitOne(400)
         if ($ok) { $c.EndConnect($r) }
         $c.Close()
@@ -112,13 +143,15 @@ function Start-Hub {
         # フォルダ名にスペースが入る（"CbC Tools"）。-ArgumentList は自動で
         # 引用してくれないので、自分で二重引用符を付ける。忘れると node は
         # 先頭の一語（例: "C:\Program"）だけを開こうとして黙って死ぬ。
-        Start-Process -FilePath 'node' `
+        Start-Process -FilePath $NodeExe `
                       -ArgumentList @('"' + $HubJs + '"') `
                       -WorkingDirectory (Split-Path -Parent $HubJs) `
                       -NoNewWindow
     } catch {
         $script:hubGaveUp = $true
-        [System.Windows.Forms.MessageBox]::Show("ハブを起動できませんでした。node が見つかりません。`n" + $_.Exception.Message, 'CbC Tools') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show(
+            "ハブを起動できませんでした。`n`n使おうとした Node: " + $NodeExe + "`n" + $_.Exception.Message,
+            'CbC Tools') | Out-Null
     }
 
     if ($script:hubTries -ge 4) {
@@ -131,7 +164,7 @@ function Start-Hub {
 }
 
 function Invoke-Hub([string]$path, [string]$method = 'GET') {
-    try { return Invoke-RestMethod -Uri ($BaseUrl + $path) -Method $method -TimeoutSec 3 }
+    try { return Invoke-RestMethod -Uri ((Get-BaseUrl) + $path) -Method $method -TimeoutSec 3 }
     catch { return $null }
 }
 

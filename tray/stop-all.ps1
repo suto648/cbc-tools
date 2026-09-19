@@ -12,8 +12,18 @@
 # =============================================================
 $ErrorActionPreference = 'SilentlyContinue'
 
-$BaseUrl = 'http://127.0.0.1:47821'
 $Root = Split-Path -Parent $PSScriptRoot
+
+# ハブが実際に待っているポートを読む。
+# 既定は 47821 だが、埋まっていたら隣へ移っているので決め打ちにしない。
+$portFile = Join-Path $Root 'logs\port.txt'
+$port = 47821
+if (Test-Path $portFile) {
+    $v = 0
+    $raw = (Get-Content $portFile -Raw -ErrorAction SilentlyContinue)
+    if ($raw -and [int]::TryParse($raw.Trim(), [ref]$v) -and $v -gt 0) { $port = $v }
+}
+$BaseUrl = "http://127.0.0.1:$port"
 
 Write-Host ''
 try {

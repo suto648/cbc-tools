@@ -33,7 +33,7 @@ CbC は、**それらを1か所にまとめて、状態を1枚の窓で見える
   "mode": "daemon",
   "implemented": true,
   "dir": "{TOOLS}\\my-tool",
-  "launch": { "exe": "node", "args": ["{TOOLS}\\my-tool\\main.js"] },
+  "launch": { "exe": "{NODE}", "args": ["{TOOLS}\\my-tool\\main.js"] },
   "probe": { "type": "heartbeat", "maxAgeSec": 8 },
   "autostart": { "type": "hub", "enabled": false },
   "log": "{LOGS}\\my-tool.log"
@@ -48,18 +48,36 @@ CbC は、**それらを1か所にまとめて、状態を1枚の窓で見える
 | `{TOOLS}` | `{CBC}\tools` |
 | `{LOGS}` | `{CBC}\logs` |
 | `{HOME}` | あなたのユーザーフォルダ（`C:\Users\<名前>`） |
+| `{NODE}` | **同梱の `node.exe`** |
 | `%VAR%` | 環境変数（見つからなければそのまま残ります） |
+
+**Node で書いたツールは `exe` に `{NODE}` と書いてください。**
+`"node"` と書くと、Node.js が入っていないPCでは起動できません。
+CbC は自分用の `node.exe` を持って歩いているので、`{NODE}` ならどのPCでも動きます。
+（`"node"` と書かれた既存の登録も、同梱のものへ自動で読み替えます）
 
 ### 2. 生きていることを知らせる
 
 2秒ごとに、この1本を投げるだけです。
 
 ```
-POST http://127.0.0.1:47821/api/state/my-tool
+POST http://127.0.0.1:<ハブのポート>/api/state/my-tool
 Content-Type: application/json
 
 { "level": "ok", "detail": "人が読む一言", "pid": 1234 }
 ```
+
+**ポートは決め打ちにしないでください。**
+環境変数 `CBC_PORT` を読み、無ければ `47821` を使います。
+
+```js
+const PORT = process.env.CBC_PORT || 47821;
+```
+
+既定の `47821` を別のアプリが使っていた場合、ハブは隣の空き番号へ移ります。
+CbC から起動されたツールには `CBC_PORT` が渡されるので、これを読んでいれば必ず届きます。
+決め打ちにすると、その場合だけ「動いているのに停止中と表示される」という
+いちばん気づきにくい壊れ方をします。
 
 - `level` は `ok` / `warn` / `error` の3つ。窓の色になります。
 - `detail` はそのまま窓に出ます。数字を入れると役に立ちます（「3件処理」「接続あり」など）。

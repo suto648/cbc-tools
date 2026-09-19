@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "ツールの登録簿の見本。初回起動のときに、これが registry.json としてコピーされる。以後は registry.json のほうを編集する（この見本は上書きされない）。パスは目印で書く: {CBC}=CbC を置いた場所 / {TOOLS}={CBC}\\tools / {LOGS}={CBC}\\logs / {HOME}=あなたのユーザーフォルダ / %VAR%=環境変数。目印を使えば、別のPCへフォルダごと移してもそのまま動く。",
+  "note": "ツールの登録簿の見本。初回起動のときに、これが registry.json としてコピーされる。以後は registry.json のほうを編集する（この見本は上書きされない）。パスは目印で書く: {CBC}=CbC を置いた場所 / {TOOLS}={CBC}\\tools / {LOGS}={CBC}\\logs / {HOME}=あなたのユーザーフォルダ / {NODE}=同梱の node.exe / %VAR%=環境変数。目印を使えば、別のPCへフォルダごと移してもそのまま動く。Node で書いたツールは exe に {NODE} と書くこと。そのPCに Node.js が入っていなくても動く。",
 
   "tools": [
     {
@@ -12,7 +12,7 @@
       "readOnly": false,
       "dir": "{TOOLS}\\sample-daemon",
       "launch": {
-        "exe": "node",
+        "exe": "{NODE}",
         "args": ["{TOOLS}\\sample-daemon\\main.js"]
       },
       "probe": {
@@ -42,7 +42,8 @@
       "http": "決まった URL が応答するかを見る。"
     },
     "3_heartbeat の送り方": {
-      "宛先": "POST http://127.0.0.1:47821/api/state/<あなたのツールのid>",
+      "宛先": "POST http://127.0.0.1:<ハブのポート>/api/state/<あなたのツールのid>",
+      "ポートの取り方": "環境変数 CBC_PORT を読み、無ければ 47821。★決め打ちにしないこと。既定のポートが他のアプリに使われていた場合、ハブは隣の空き番号へ移る。CbC から起動されたツールには CBC_PORT が渡されるので、それを読めば必ず届く。",
       "中身": { "level": "ok / warn / error のどれか", "detail": "人が読む一言", "pid": 1234 },
       "間隔": "2 秒ごと。8 秒届かないと『停止中』として扱われる",
       "補足": "Python なら tools\\_shared\\cbc.py が、この送信をまとめてある"

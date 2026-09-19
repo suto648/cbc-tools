@@ -41,16 +41,23 @@ $files = @(
     'CbC起動.bat',
     'CbC停止.bat',
     'cbc.vbs',
-    'CONNECT.md'
+    'CONNECT.md',
+    'README.md'
 )
 foreach ($f in $files) {
     $src = Join-Path $PSScriptRoot $f
-    if (Test-Path $src) { Copy-Item $src $distDir } else { Write-Host ("  ! 見つからない: " + $f) -ForegroundColor Yellow }
+    # ★見つからないときは警告で済ませず中止する。
+    #   警告だと、必要なファイルが欠けた配布物が黙って出来上がる。
+    #   実際に README.dist.md が消えていたのに気づけなかった（台帳に記録）。
+    if (-not (Test-Path $src)) { throw ("配布物に入れるはずのファイルがありません: " + $f) }
+    Copy-Item $src $distDir
 }
 
-# README は「買った人向け」の別ファイルを README.md という名前で入れる。
-# リポジトリの README.md は作者自身の作業メモで、本人のツールとパスが載っている。
-Copy-Item (Join-Path $PSScriptRoot 'README.dist.md') (Join-Path $distDir 'README.md')
+# README は配布用のものをそのまま入れる。
+# （以前は README.dist.md という別ファイルを用意していたが、リポジトリ側の
+#  README.md から本人のパスを既に外したので、分ける理由が無くなった。
+#  分けたままにすると「リポジトリに無いファイルを読むビルド」になり、
+#  実際にそれで組み直せなくなった。→ 台帳に記録済み）
 
 # hub（registry.json は入れない。見本だけ入れる）
 $hubDst = Join-Path $distDir 'hub'
@@ -127,13 +134,13 @@ Write-Host "Checking for personal files..."
 # 名前を並べて禁止する方式だと、新しく作ったツールが素通りする。
 $allowedTools = @('_shared', 'sample-daemon', 'check-cmd-encoding.js', 'portable-registry.js')
 $leaked = @()
-foreach ($f in @('hubegistry.json', 'hub\state.json')) {
+foreach ($f in @('hub\registry.json', 'hub\state.json')) {
     if (Test-Path (Join-Path $distDir $f)) { $leaked += $f }
 }
 $toolsInDist = Join-Path $distDir 'tools'
 if (Test-Path $toolsInDist) {
     foreach ($e in (Get-ChildItem $toolsInDist)) {
-        if ($allowedTools -notcontains $e.Name) { $leaked += ('tools' + $e.Name) }
+        if ($allowedTools -notcontains $e.Name) { $leaked += ('tools\' + $e.Name) }
     }
 }
 if ($leaked.Count -gt 0) {

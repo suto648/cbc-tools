@@ -31,7 +31,12 @@ const HOST = '127.0.0.1';
 // 環境変数 CBC_PORT で変えられる（他のものと衝突したとき／検証で本番と並走したいとき）。
 // 変えた場合は tray/*.ps1 と tools/_shared/cbc.py も同じ値を見るので、
 // CbC起動.bat から起動する限りは揃う。
-const PORT = Number(process.env.CBC_PORT) || 47821;
+// ★ const ではなく let。
+//   既定のポートを「CbC ではない別のアプリ」が使っていた場合、
+//   そこで諦めず次の空きへ退避する（買った人に環境変数を触らせないため）。
+//   退避したときは、この変数が指す先が本当の待受先になる。
+let PORT = Number(process.env.CBC_PORT) || 47821;
+const PORT_GIVEN = Boolean(process.env.CBC_PORT);   // 人が明示した番号なら勝手に動かさない
 
 const HUB_DIR = __dirname;
 const ROOT = path.join(HUB_DIR, '..');
@@ -125,11 +130,20 @@ function tcpOpen(port) {
 //   %VAR%   … 環境変数（見つからなければそのまま残す）
 //
 // 文字列のどこに現れても置き換える（launch.exe / args / log / dir / cwd …）。
+// 同梱の node.exe。配布物では {CBC}\node\node.exe に入っている。
+// ★これが要る理由: 受け取った人のPCに Node.js が入っている保証は無い。
+//   登録簿に exe: "node" と書くと、入っていないPCでは起動に失敗する
+//   （環境構築ゼロで動く、という約束が崩れる）。
+//   同梱が無い環境（開発中のリポジトリ直実行など）では、素の "node" に戻す。
+const BUNDLED_NODE = path.join(ROOT, 'node', 'node.exe');
+const NODE_EXE = fs.existsSync(BUNDLED_NODE) ? BUNDLED_NODE : 'node';
+
 const PATH_TOKENS = {
   '{CBC}': ROOT,
   '{HOME}': os.homedir(),
   '{TOOLS}': path.join(ROOT, 'tools'),
   '{LOGS}': LOG_DIR,
+  '{NODE}': NODE_EXE,
 };
 
 function expandPathTokens(value) {
@@ -707,8 +721,31 @@ function savePersist() { writeJsonAtomic(STATE_FILE, persist); }
 // =============================================================
 //  操作
 // =============================================================
+// ツールを起動するときに渡す環境。
+// ★CBC_PORT を必ず入れる。
+//   ハブは、既定のポートが別のアプリに埋められていたら隣の番号へ退避する。
+//   そのときツール側が既定の 47821 に生存通知を送り続けると、
+//   動いているのに「停止中」と表示される（宛先違いに気づけない一番嫌な壊れ方）。
+//   ここで実際の待受ポートを教えることで、退避しても通知が届く。
+function toolEnv() {
+  return Object.assign({}, process.env, { CBC_PORT: String(PORT) });
+}
+
+// 登録簿に exe: "node" と書かれていたら、同梱の node.exe に読み替える。
+// Node.js が入っていないPCでも見本のツールが動くようにするため。
+function resolveExe(exe) {
+  if (typeof exe !== 'string') return exe;
+  const base = path.basename(exe).toLowerCase();
+  if ((base === 'node' || base === 'node.exe') && !path.isAbsolute(exe) && NODE_EXE !== 'node') {
+    return NODE_EXE;
+  }
+  return exe;
+}
+
 function launchDetached(exe, args) {
-  const p = spawn(exe, args, { stdio: 'ignore', detached: true, shell: false, windowsHide: true });
+  const p = spawn(resolveExe(exe), args, {
+    stdio: 'ignore', detached: true, shell: false, windowsHide: true, env: toolEnv(),
+  });
   p.unref();
   return p;
 }
@@ -716,7 +753,9 @@ function launchDetached(exe, args) {
 // 直し方の案内は「見えないと意味がない」ので、ここだけ窓を出す。
 // 対話（/login の入力・ブラウザ承認）が要るため windowsHide は false。
 function launchVisible(exe, args) {
-  const p = spawn(exe, args, { stdio: 'ignore', detached: true, shell: false, windowsHide: false });
+  const p = spawn(resolveExe(exe), args, {
+    stdio: 'ignore', detached: true, shell: false, windowsHide: false, env: toolEnv(),
+  });
   p.unref();
   return p;
 }
@@ -1287,6 +1326,15 @@ const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, `http://${HOST}:${PORT}`);
     const p = u.pathname;
 
+    // 身元を名乗る口。
+    // ★これは機械可読の契約。文言も形も変えないこと。
+    //   ポートが埋まっていたとき「そこに居るのは本当に CbC か」を確かめるのに使う。
+    //   以前は /api/status の中身の形（tools が配列か）で推測していたが、
+    //   md-editor で同じ推測をして実際に外した（見ていた欄の名前が違った）。
+    if (p === '/api/whoami' && req.method === 'GET') {
+      return sendJson(res, 200, { app: 'cbc-tools', api: 1 });
+    }
+
     if (p === '/api/tools' && req.method === 'GET') return sendJson(res, 200, currentPayload());
 
     // セッション一覧（session-board から借りる。時間がかかるので SSE には載せない）
@@ -1411,48 +1459,95 @@ const server = http.createServer(async (req, res) => {
 //  起動
 // =============================================================
 if (require.main === module) {
+  // ポート退避の管理。
+  // portAttempt は「今が何回目の待受試行か」。埋まっていたポートを調べた返事が
+  // 遅れて届いたとき、それが前の試行のものなら捨てる（二重にずらさないため）。
+  let portAttempt = 0;
+  const PORT_HOPS_MAX = 10;
+
+  function moveToNextPort(reason, forAttempt) {
+    if (forAttempt !== portAttempt) return;   // 前の試行の遅れた通知は捨てる
+    if (PORT_GIVEN) {
+      // 人が CBC_PORT で明示した番号は勝手に動かさない（意図があって指定している）。
+      console.error('');
+      console.error(`  ${reason}。`);
+      console.error('  CBC_PORT で指定された番号なので、勝手に別の番号へは移りません。');
+      console.error('');
+      log(`${reason}（CBC_PORT 指定のため退避しない）`);
+      process.exit(1);
+    }
+    if (portAttempt >= PORT_HOPS_MAX) {
+      console.error('');
+      console.error(`  ${reason}。`);
+      console.error(`  近くの ${PORT_HOPS_MAX} 個のポートも全て使われていました。`);
+      console.error('  一度パソコンを再起動するか、環境変数 CBC_PORT に空いている番号を入れてください。');
+      console.error('');
+      log(`${reason}。近隣ポートも全滅したため起動できない`);
+      process.exit(1);
+    }
+    portAttempt++;
+    const from = PORT;
+    PORT = PORT + 1;
+    log(`${reason}。ポート ${PORT} で試します（${from} から退避）`);
+    server.listen(PORT, HOST);
+  }
+
   server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
       // ポートが埋まっている。ただし「CbC が既に居る」のか
       // 「別のアプリが偶然そこを使っている」のかは、確かめないと分からない。
       // 確かめずに窓を開くと、まったく関係ないアプリの画面を出してしまう。
-      const req = http.get({ host: HOST, port: PORT, path: '/api/status', timeout: 1500 }, res => {
+      //
+      // ★居たのが CbC 自身なら、二重に起動せず窓だけ開く（常駐アプリなので単一で居たい）。
+      //   居たのが別物なら、そこで諦めずに次の空きポートへ退避する。
+      //   買った人に「環境変数を設定してください」と言わせないため。
+      const myAttempt = portAttempt;
+      const probePort = PORT;
+      const req = http.get({ host: HOST, port: probePort, path: '/api/whoami', timeout: 1500 }, res => {
         let body = '';
         res.on('data', c => body += c);
         res.on('end', () => {
           let isCbC = false;
           try {
             const j = JSON.parse(body);
-            isCbC = res.statusCode === 200 && j && Array.isArray(j.tools);
+            // ★形から推測せず、名乗った名前で判定する。
+            //   md-editor では中身の欄の名前で推測して実際に外した。
+            isCbC = res.statusCode === 200 && j && j.app === 'cbc-tools';
           } catch (_) { /* CbC ではない */ }
           if (isCbC) {
             log('すでに起動しています。窓だけ開きます。');
-            openWindow(`http://${HOST}:${PORT}/`, 1040, 820);
+            openWindow(`http://${HOST}:${probePort}/`, 1040, 820);
+            process.exit(0);
           } else {
-            console.error('');
-            console.error(`  ポート ${PORT} を、CbC ではない別のものが使っています。`);
-            console.error('  そのアプリを終了するか、環境変数 CBC_PORT に空いている番号を入れてください。');
-            console.error('    例) set CBC_PORT=47831');
-            console.error('');
-            log(`ポート ${PORT} が CbC 以外に使われているため起動できません。`);
+            moveToNextPort(`ポート ${probePort} は CbC 以外のものが使っています`, myAttempt);
           }
-          process.exit(0);
         });
       });
       req.on('error', () => {
-        console.error('');
-        console.error(`  ポート ${PORT} が使われていますが、応答がありません。`);
-        console.error('  環境変数 CBC_PORT に空いている番号を入れてお試しください。');
-        console.error('');
-        process.exit(1);
+        // 埋まっているのに返事が無い＝CbC ではない（あるいは応答不能）。退避する。
+        moveToNextPort(`ポート ${probePort} は使用中で応答がありません`, myAttempt);
       });
-      req.on('timeout', () => { req.destroy(); });
+      req.on('timeout', () => { req.destroy(); });   // destroy が 'error' を呼ぶ
     } else { throw e; }
   });
 
   server.listen(PORT, HOST, async () => {
     try { fs.unlinkSync(STOP_FLAG); } catch (_) {}   // 立ち上がった＝止める意思は解除
     log(`CbC hub: http://${HOST}:${PORT}/`);
+
+    // ★機械可読の契約。この1行の形を変えないこと。
+    //   検証スクリプトと外側の起動役が「上がったか」をこれで判定する。
+    //   以前 md-editor で、判定に使われていた文言を私が勝手に消してテストを壊した。
+    console.log(`[ready] http://${HOST}:${PORT}/`);
+
+    // 実際に待っているポートを外へ知らせる。
+    // ★トレイ（tray.ps1）がこれを読む。
+    //   埋まっていて隣の番号へ移った場合、ここに書かないとトレイがハブを見失い、
+    //   ランプが永遠に灰色のまま「動いていない」ように見える。
+    try {
+      fs.mkdirSync(LOG_DIR, { recursive: true });
+      fs.writeFileSync(path.join(LOG_DIR, 'port.txt'), String(PORT), 'utf8');
+    } catch (_) { /* 書けなくても本体は動く。トレイが既定値で当てにいくだけ */ }
     startProbe();
     await refreshPorts();
 
